@@ -1,6 +1,7 @@
 /* 動画から顔写真を自動抽出 — アプリ本体（すべて端末内で処理） */
 import { FilesetResolver, FaceLandmarker } from './lib/vision_bundle.mjs';
 import { enhanceCanvas } from './enhance.js';
+import { aiSupported, ensureAi, aiUpscale } from './lib/ai-upscale.js';
 
 const $ = (id) => document.getElementById(id);
 const DEBUG = new URLSearchParams(location.search).has('debug');
@@ -22,6 +23,7 @@ const els = {
   resultCard: $('resultCard'), summary: $('summary'), grid: $('grid'), noFace: $('noFace'),
   cropSel: $('cropSel'), sizeSel: $('sizeSel'), levelSel: $('levelSel'),
   saveAllBtn: $('saveAllBtn'), saveFolderBtn: $('saveFolderBtn'),
+  aiSrChk: $('aiSrChk'), aiSrLabel: $('aiSrLabel'), aiSrStatus: $('aiSrStatus'), aiAllBtn: $('aiAllBtn'),
   falKey: $('falKey'), falModel: $('falModel'), saveKeyBtn: $('saveKeyBtn'), clearKeyBtn: $('clearKeyBtn'),
   aiState: $('aiState'),
   saveHint: $('saveHint'), mobileTip: $('mobileTip'),
@@ -38,6 +40,7 @@ const state = {
   baseName: 'face',
   exportVideo: null,
   aw: 0, ah: 0,
+  aiOn: false, aiFailNotified: false, aiChain: Promise.resolve(),
   falKey: localStorage.getItem('fe_fal_key') || '',
   falModel: localStorage.getItem('fe_fal_model') || 'fal-ai/codeformer',
 };
@@ -683,6 +686,7 @@ async function analyze() {
     (smallCount ? `<br><span class="warn-tag">遠目の顔が ${smallCount} 枚あります — 自動でアップ・高画質化して保存できます</span>` : '');
   renderGrid();
   els.resultCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  if (state.aiOn) processCardAi(cardRefs[0]);
 }
 
 function setBar(v) { els.bar.style.width = `${clamp(v, 0, 100)}%`; }
@@ -744,6 +748,20 @@ async function makeThumbs(c) {
 /* ---------- 表示 ---------- */
 const cardRefs = [];
 
+function sizeClass(c) { return c.facePxW < 80 ? 'tiny' : c.facePxW < 120 ? 'small' : ''; }
+
+function sizeInfoHtml(c) {
+  const outPx = outSideFor(c);
+  const sr = (state.aiOn && c.sr && c.sr.key === els.cropSel.value) ? c.sr : null;
+  let html = `元の顔 <b>${Math.round(c.facePxW)}×${Math.round(c.facePxH)}px</b>`;
+  if (sr) html += ` → AI超解像 <b>${sr.side}×${sr.side}px</b>`;
+  html += ` → 出力 <b>${outPx}×${outPx}px</b>`;
+  if (sr) html += '<div class="small-note">※ AI超解像（端末内AI）で高画質化した画像を保存します</div>';
+  else if (c.facePxW < 80) html += '<div class="tiny-note">※ 元画像が小さいため、AI補完時に顔立ちが変わる場合があります</div>';
+  else if (c.facePxW < 120) html += '<div class="small-note">※ 元画像が小さめです。アップ＋補正して保存します</div>';
+  return html;
+}
+
 async function renderGrid() {
   els.grid.innerHTML = '';
   cardRefs.length = 0;
@@ -757,8 +775,8 @@ async function renderGrid() {
     card.className = 'cand';
     const srcPx = `${Math.round(c.facePxW)}×${Math.round(c.facePxH)}px`;
     const outPx = outSideFor(c);
-    const small = c.facePxW < 120;
     const tiny = c.facePxW < 80;
+    const aiOk = aiSupported();
     card.innerHTML = `
       <div class="thumbwrap">
         <img alt="候補 ${i + 1}" src="">
@@ -767,26 +785,25 @@ async function renderGrid() {
         <div class="time">${fmtTime(c.t)}</div>
         ${level !== 'none' ? '<div class="badge-enh">✨ 補正</div>' : ''}
         <div class="badge-ai" hidden>AI</div>
+        <div class="badge-sr" hidden>AI超解像</div>
       </div>
       <div class="cbody">
         <div class="srow"><span>正面度</span><div class="track"><div class="fill" style="width:${sc.front}%"></div></div><span class="num">${Math.round(sc.front)}</span></div>
         <div class="srow"><span>鮮明さ</span><div class="track"><div class="fill" style="width:${sc.sharp}%"></div></div><span class="num">${Math.round(sc.sharp)}</span></div>
         <div class="srow"><span>大きさ</span><div class="track"><div class="fill" style="width:${sc.size}%"></div></div><span class="num">${Math.round(sc.size)}</span></div>
         ${c.warns.length ? `<div class="warns">${c.warns.map((w) => `<span class="warn-tag">${w}</span>`).join('')}</div>` : ''}
-        <div class="sizeinfo ${tiny ? 'tiny' : small ? 'small' : ''}">
-          元の顔 <b>${srcPx}</b> → 出力 <b>${outPx}×${outPx}px</b>
-          ${tiny ? '<div class="tiny-note">※ 元画像が小さいため、AI補完時に顔立ちが変わる場合があります</div>' : small ? '<div class="small-note">※ 元画像が小さめです。アップ＋補正して保存します</div>' : ''}
-        </div>
+        <div class="sizeinfo ${sizeClass(c)}">${sizeInfoHtml(c)}</div>
         ${level !== 'none' ? `<button class="btn btn-ghost small toggle" data-act="toggle" data-i="${i}">元画像を見る</button>` : ''}
         <div class="acts">
           <button class="btn btn-main" data-act="jpg" data-i="${i}">JPG保存</button>
           <button class="btn btn-ghost" data-act="png" data-i="${i}">PNG</button>
           <button class="btn btn-ghost" data-act="frame" data-i="${i}">全体</button>
         </div>
+        ${aiOk ? `<button class="btn btn-sr" data-act="sr" data-i="${i}">✨ AI超解像</button>` : ''}
         ${state.falKey ? `<button class="btn btn-ai" data-act="ai" data-i="${i}">✨ AI高画質化</button>` : ''}
       </div>`;
     els.grid.appendChild(card);
-    cardRefs.push({ card, img: card.querySelector('img'), c, aiBadge: card.querySelector('.badge-ai'), enhBadge: card.querySelector('.badge-enh'), toggle: card.querySelector('[data-act="toggle"]') });
+    cardRefs.push({ card, img: card.querySelector('img'), c, aiBadge: card.querySelector('.badge-ai'), enhBadge: card.querySelector('.badge-enh'), srBadge: card.querySelector('.badge-sr'), toggle: card.querySelector('[data-act="toggle"]') });
   }
 
   // サムネイルを順番に生成（UIを止めない）
@@ -803,13 +820,18 @@ function applyView(ref) {
     img.src = c.ai.url;
     ref.aiBadge.hidden = false;
     if (ref.enhBadge) ref.enhBadge.hidden = true;
+    if (ref.srBadge) ref.srBadge.hidden = true;
   } else {
-    const isOrig = c.view === 'orig' || els.levelSel.value === 'none';
-    img.src = isOrig ? c.thumbOrig : c.thumbEnh;
-    if (ref.enhBadge) ref.enhBadge.hidden = isOrig;
+    const srOn = state.aiOn && c.sr && c.sr.key === els.cropSel.value && c.sr.thumb;
+    const isOrig = c.view === 'orig' || (!srOn && els.levelSel.value === 'none');
+    img.src = isOrig ? c.thumbOrig : (srOn ? c.sr.thumb : c.thumbEnh);
+    if (ref.enhBadge) ref.enhBadge.hidden = isOrig || !!srOn;
+    if (ref.srBadge) ref.srBadge.hidden = !(srOn && !isOrig);
     ref.aiBadge.hidden = !(c.ai && c.ai.url);
   }
   if (ref.toggle) ref.toggle.textContent = c.view === 'orig' ? '補正後を見る' : '元画像を見る';
+  const info = ref.card && ref.card.querySelector('.sizeinfo');
+  if (info) info.innerHTML = sizeInfoHtml(c);
 }
 
 async function recropAll() {
@@ -819,6 +841,7 @@ async function recropAll() {
     if (ref.c.view !== 'ai') applyView(ref);
     await sleep(0);
   }
+  if (state.aiOn) processCardAi(cardRefs[0]);
 }
 
 /* ---------- 書き出し ---------- */
@@ -874,17 +897,28 @@ async function fullResFrame(t) {
   return c;
 }
 
-/** 切り出し＋高画質化した canvas を作る */
+/** 切り出し＋高画質化した canvas を作る（AI超解像ONならAIの結果を元にする） */
 async function buildCropCanvas(c, opts = {}) {
+  const level = opts.level !== undefined ? opts.level : els.levelSel.value;
+  const minSide = opts.minSide !== undefined ? opts.minSide : minOutSide();
+  const fixedSide = opts.fixedSide || fixedOutSide();
+  const maxSide = opts.maxSide || maxOutSide();
+
+  if (state.aiOn && !opts.noAi) {
+    const sr = await ensureSr(c, opts);
+    if (sr) {
+      const out = enhanceCanvas(sr.canvas, { minSide, fixedSide, maxSide, level });
+      if (DEBUG) window.__fe.lastExport = { natural: sr.side, out: out.width, ai: true };
+      return out;
+    }
+  }
+
   const src = await fullResFrame(c.t);
   const r = cropRect(c.box, src.width, src.height, els.cropSel.value);
   const cut = newCanvas(r.size, r.size);
   cut.getContext('2d').drawImage(src, r.sx, r.sy, r.size, r.size, 0, 0, cut.width, cut.height);
-  const level = opts.level !== undefined ? opts.level : els.levelSel.value;
-  const minSide = opts.minSide !== undefined ? opts.minSide : minOutSide();
-  const fixedSide = opts.fixedSide || fixedOutSide();
-  const out = enhanceCanvas(cut, { minSide, fixedSide, maxSide: opts.maxSide || maxOutSide(), level });
-  if (DEBUG) window.__fe.lastExport = { natural: r.size, out: out.width };
+  const out = enhanceCanvas(cut, { minSide, fixedSide, maxSide, level });
+  if (DEBUG) window.__fe.lastExport = { natural: r.size, out: out.width, ai: false };
   return out;
 }
 
@@ -912,8 +946,10 @@ async function saveOne(i, format) {
       return;
     }
     const out = await buildCropCanvas(c);
+    const usedAi = state.aiOn && c.sr && c.sr.key === els.cropSel.value;
     const blob = await canvasToBlob(out, format === 'png' ? 'image/png' : 'image/jpeg', 0.95);
-    downloadBlob(blob, exportName(c, i, format, els.levelSel.value === 'none' ? '' : 'hq'));
+    const suffix = usedAi ? 'ai-sr' : (els.levelSel.value === 'none' ? '' : 'hq');
+    downloadBlob(blob, exportName(c, i, format, suffix));
   } catch (e) {
     console.error(e);
     toast('保存に失敗しました');
@@ -934,7 +970,7 @@ async function saveAll() {
   const n = state.candidates.length;
   if (IS_IOS) toast('「ダウンロード」を許可してください（ファイルアプリに保存されます）', 4000);
   for (let i = 0; i < n; i++) {
-    toast(`保存中… ${i + 1} / ${n}`, 900);
+    toast(state.aiOn ? `AI超解像して保存中… ${i + 1} / ${n}` : `保存中… ${i + 1} / ${n}`, 900);
     await saveOne(i, 'jpg');
     await sleep(IS_IOS ? 700 : 340);
   }
@@ -962,8 +998,9 @@ async function saveFolder() {
         name = exportName(state.candidates[i], i, 'jpg', 'ai');
       } else {
         const out = await buildCropCanvas(state.candidates[i]);
+        const usedAi = state.aiOn && state.candidates[i].sr && state.candidates[i].sr.key === els.cropSel.value;
         blob = await canvasToBlob(out, 'image/jpeg', 0.95);
-        name = exportName(state.candidates[i], i, 'jpg', els.levelSel.value === 'none' ? '' : 'hq');
+        name = exportName(state.candidates[i], i, 'jpg', usedAi ? 'ai-sr' : (els.levelSel.value === 'none' ? '' : 'hq'));
       }
       const fh = await dir.getFileHandle(name, { create: true });
       const w = await fh.createWritable();
@@ -1042,43 +1079,218 @@ function aiRevert(ref) {
   if (btn) { btn.textContent = '✨ AI高画質化'; btn.dataset.act = 'ai'; }
 }
 
+/* ---------- AI超解像（端末内AI・API不要） ---------- */
+
+/** AIに入れる画像の上限（メモリと時間のため）。出力はこの2倍。 */
+function aiMaxSide() {
+  return IS_IOS ? 256 : 384;
+}
+
+function setAiStatus(text, kind) {
+  const el = els.aiSrStatus;
+  if (!el) return;
+  if (!text) { el.hidden = true; el.textContent = ''; return; }
+  el.hidden = false;
+  el.textContent = text;
+  el.className = 'aistatus' + (kind ? ' ' + kind : '');
+}
+
+function thumbFromCanvas(src, side = 400) {
+  const c = newCanvas(side, side);
+  const g = c.getContext('2d');
+  g.imageSmoothingEnabled = true;
+  g.imageSmoothingQuality = 'high';
+  g.drawImage(src, 0, 0, side, side);
+  return c.toDataURL('image/jpeg', 0.92);
+}
+
+function canvasToJpegUrl(src, maxSide = 1000) {
+  const s = Math.min(1, maxSide / Math.max(src.width, src.height));
+  const c = newCanvas(src.width * s, src.height * s);
+  const g = c.getContext('2d');
+  g.imageSmoothingEnabled = true;
+  g.imageSmoothingQuality = 'high';
+  g.drawImage(src, 0, 0, c.width, c.height);
+  return c.toDataURL('image/jpeg', 0.95);
+}
+
+/** AI処理は1件ずつ順番に（tfjsの同時実行を避ける） */
+function aiEnqueue(fn) {
+  const run = state.aiChain.then(fn, fn);
+  state.aiChain = run.then(() => {}, () => {});
+  return run;
+}
+
+/**
+ * 候補1枚をAI超解像（2倍）。適用済みならキャッシュを返す。
+ * AI OFF / 失敗時は null を返し、呼び出し側は標準補正へフォールバックする。
+ */
+async function ensureSr(c, opts = {}) {
+  if (!state.aiOn) return null;
+  const key = els.cropSel.value;
+  if (c.sr && c.sr.key === key) return c.sr;
+
+  return aiEnqueue(async () => {
+    if (!state.aiOn) return null;
+    if (c.sr && c.sr.key === key) return c.sr;
+    setAiStatus('高画質化中…（AI超解像）', 'busy');
+    try {
+      const full = await fullResFrame(c.t);
+      const r = cropRect(c.box, full.width, full.height, key);
+      const cut = newCanvas(r.size, r.size);
+      cut.getContext('2d').drawImage(full, r.sx, r.sy, r.size, r.size, 0, 0, cut.width, cut.height);
+      const out = await aiUpscale(cut, {
+        maxSide: aiMaxSide(),
+        onProgress: (p) => { if (opts.onProgress) opts.onProgress(p); },
+      });
+      const sr = { key, canvas: out, thumb: thumbFromCanvas(out, 400), side: Math.min(out.width, out.height) };
+      c.sr = sr;
+      return sr;
+    } catch (e) {
+      console.error('AI超解像 失敗', e);
+      c.sr = null;
+      if (!state.aiFailNotified) {
+        state.aiFailNotified = true;
+        toast('この画像はAI超解像にできませんでした（端末のメモリ不足などの可能性）。標準の高画質補正で保存します。', 6000);
+      }
+      return null;
+    }
+  });
+}
+
+/** グローバルスイッチをONにする（モデルの読み込みはここで初めて走る） */
+async function enableAi({ demo = true } = {}) {
+  if (state.aiOn) return true;
+  if (!aiSupported()) {
+    setAiStatus('この端末・ブラウザではAI超解像を使えません（WebGL非対応）。標準の高画質補正は使えます。', 'ng');
+    els.aiSrChk.checked = false;
+    return false;
+  }
+  els.aiSrChk.disabled = true;
+  try {
+    await ensureAi({ onStatus: (t) => setAiStatus(t, 'busy') });
+    state.aiOn = true;
+    state.aiFailNotified = false;
+    els.aiSrChk.checked = true;
+    setAiStatus(`AI超解像 ON（2倍・端末内AI）／元の${aiMaxSide()}px → ${aiMaxSide() * 2}px で高画質化します`, 'ok');
+    if (els.aiAllBtn) els.aiAllBtn.hidden = false;
+    for (const ref of cardRefs) applyView(ref);
+    if (demo && cardRefs.length) await processCardAi(cardRefs[0]);
+    return true;
+  } catch (e) {
+    console.error('AI超解像モデル 読み込み失敗', e);
+    state.aiOn = false;
+    els.aiSrChk.checked = false;
+    setAiStatus('AI超解像モデルを読み込めませんでした。通信環境を確認してください（標準の高画質補正はそのまま使えます）。', 'ng');
+    toast('AI超解像モデルを読み込めませんでした。標準の高画質補正はそのまま使えます。', 6000);
+    return false;
+  } finally {
+    els.aiSrChk.disabled = false;
+  }
+}
+
+function disableAi() {
+  state.aiOn = false;
+  els.aiSrChk.checked = false;
+  if (els.aiAllBtn) els.aiAllBtn.hidden = true;
+  for (const ref of cardRefs) applyView(ref);
+  setAiStatus('AI超解像 OFF（標準の高画質補正で保存します）', '');
+  setTimeout(() => { if (!state.aiOn) setAiStatus('', ''); }, 4000);
+}
+
+/** カード1枚のAI超解像を実行して表示を差し替える */
+async function processCardAi(ref) {
+  if (!ref || ref.srBusy) return;
+  if (!state.aiOn) {
+    const ok = await enableAi({ demo: false });
+    if (!ok) return;
+  }
+  ref.srBusy = true;
+  const btn = ref.card.querySelector('[data-act="sr"]');
+  if (btn) { btn.disabled = true; btn.textContent = 'AI処理中…'; }
+  try {
+    const sr = await ensureSr(ref.c, {
+      onProgress: (p) => {
+        if (btn) btn.textContent = `AI処理中… ${Math.round(p)}%`;
+        setAiStatus(`高画質化中…（AI超解像 ${Math.round(p)}%）`, 'busy');
+      },
+    });
+    applyView(ref);
+    if (sr) {
+      setAiStatus(`AI超解像 適用済み（${sr.side}×${sr.side}px）`, 'ok');
+      const info = ref.card.querySelector('.sizeinfo');
+      if (info) info.innerHTML = sizeInfoHtml(ref.c);
+    } else {
+      setAiStatus('AI超解像を使えませんでした（標準補正で保存します）', 'ng');
+    }
+  } finally {
+    ref.srBusy = false;
+    if (btn) { btn.disabled = false; btn.textContent = '✨ AI超解像（やり直す）'; }
+  }
+}
+
+/** 表示中の全候補をAI超解像（ボタンで任意実行） */
+async function processAllAi() {
+  for (let i = 0; i < cardRefs.length; i++) {
+    if (!state.aiOn) break;
+    const ref = cardRefs[i];
+    if (ref.c.sr && ref.c.sr.key === els.cropSel.value) continue;
+    setAiStatus(`AI超解像をまとめて適用中… ${i + 1} / ${cardRefs.length}`, 'busy');
+    await processCardAi(ref);
+    await sleep(0);
+  }
+  if (state.aiOn) setAiStatus('AI超解像 適用済み（2倍）', 'ok');
+}
+
 
 /* ---------- 拡大プレビュー（補正前後の比較） ---------- */
 const lb = { ref: null, mode: 'enh', cache: new Map() };
 
 async function lbRender(c, mode) {
-  const key = `${mode}:${mode === 'ai' ? c.ai.url : els.cropSel.value + '/' + els.levelSel.value}`;
+  const key = `${mode}:${mode === 'ai' ? (c.ai && c.ai.url) : els.cropSel.value + '/' + els.levelSel.value + '/' + (state.aiOn ? 'ai' : 'std')}`;
   if (lb.cache.has(c) && lb.cache.get(c).has(key)) return lb.cache.get(c).get(key);
   let url;
   if (mode === 'ai' && c.ai) {
     url = c.ai.url;
-  } else {
-    const img = await blobToImage(c.frameBlob);
-    const r = cropRect(c.box, img.naturalWidth, img.naturalHeight, els.cropSel.value);
-    const baseSide = Math.min(r.size, 1000);
-    const base = newCanvas(baseSide, baseSide);
-    base.getContext('2d').drawImage(img, r.sx, r.sy, r.size, r.size, 0, 0, baseSide, baseSide);
-    const target = Math.min(900, Math.round(baseSide * 1.6));
-    if (mode === 'orig' || els.levelSel.value === 'none') {
-      const plain = newCanvas(target, target);
-      const pc = plain.getContext('2d');
-      pc.imageSmoothingEnabled = true;
-      pc.imageSmoothingQuality = 'high';
-      pc.drawImage(base, 0, 0, target, target);
-      url = plain.toDataURL('image/jpeg', 0.94);
+  } else if (mode !== 'orig' && state.aiOn) {
+    // AI超解像 ON の「補正後」は、AIで2倍にした画像をそのまま見せる
+    els.lbInfo.textContent = '高画質化中…（AI超解像）';
+    const sr = await ensureSr(c);
+    if (sr) {
+      url = canvasToJpegUrl(sr.canvas, 1000);
     } else {
-      const out = enhanceCanvas(base, { fixedSide: target, level: els.levelSel.value });
-      url = out.toDataURL('image/jpeg', 0.95);
+      url = await lbClassic(c, mode === 'orig');
     }
+  } else {
+    url = await lbClassic(c, mode === 'orig');
   }
   if (!lb.cache.has(c)) lb.cache.set(c, new Map());
   lb.cache.get(c).set(key, url);
   return url;
 }
 
+/** 従来の補正（AIなし）でのプレビュー画像 */
+async function lbClassic(c, plainOnly) {
+  const img = await blobToImage(c.frameBlob);
+  const r = cropRect(c.box, img.naturalWidth, img.naturalHeight, els.cropSel.value);
+  const baseSide = Math.min(r.size, 1000);
+  const base = newCanvas(baseSide, baseSide);
+  base.getContext('2d').drawImage(img, r.sx, r.sy, r.size, r.size, 0, 0, baseSide, baseSide);
+  const target = Math.min(900, Math.round(baseSide * 1.6));
+  if (plainOnly || els.levelSel.value === 'none') {
+    const plain = newCanvas(target, target);
+    const pc = plain.getContext('2d');
+    pc.imageSmoothingEnabled = true;
+    pc.imageSmoothingQuality = 'high';
+    pc.drawImage(base, 0, 0, target, target);
+    return plain.toDataURL('image/jpeg', 0.94);
+  }
+  return enhanceCanvas(base, { fixedSide: target, level: els.levelSel.value }).toDataURL('image/jpeg', 0.95);
+}
+
 async function openLightbox(ref) {
   lb.ref = ref;
-  lb.mode = ref.c.view === 'ai' ? 'ai' : (els.levelSel.value === 'none' ? 'orig' : 'enh');
+  lb.mode = ref.c.view === 'ai' ? 'ai' : (els.levelSel.value === 'none' && !state.aiOn ? 'orig' : 'enh');
   lb.cache.delete(ref.c);
   els.lightbox.hidden = false;
   els.lbAi.hidden = !(ref.c.ai && ref.c.ai.url);
@@ -1093,8 +1305,12 @@ async function lbShow() {
   els.lbOrig.setAttribute('aria-pressed', String(lb.mode === 'orig'));
   els.lbEnh.setAttribute('aria-pressed', String(lb.mode === 'enh'));
   els.lbAi.setAttribute('aria-pressed', String(lb.mode === 'ai'));
+  const sr = (state.aiOn && c.sr && c.sr.key === els.cropSel.value) ? c.sr : null;
+  els.lbEnh.textContent = (state.aiOn && lb.mode !== 'ai') ? '補正後（AI）' : '補正後';
   const out = outSideFor(c);
-  els.lbInfo.textContent = `${fmtTime(c.t)} ・ 元の顔 ${Math.round(c.facePxW)}×${Math.round(c.facePxH)}px ・ 出力 ${out}×${out}px`;
+  els.lbInfo.textContent = `${fmtTime(c.t)} ・ 元の顔 ${Math.round(c.facePxW)}×${Math.round(c.facePxH)}px`
+    + (sr ? ` ・ AI超解像 ${sr.side}×${sr.side}px` : '')
+    + ` ・ 出力 ${out}×${out}px`;
 }
 
 function closeLightbox() { els.lightbox.hidden = true; lb.ref = null; }
@@ -1118,7 +1334,8 @@ async function lbShareImage() {
   try {
     const out = await buildCropCanvas(c);
     const blob = await canvasToBlob(out, 'image/jpeg', 0.95);
-    const name = exportName(c, i, 'jpg', 'hq');
+    const usedAi = state.aiOn && c.sr && c.sr.key === els.cropSel.value;
+    const name = exportName(c, i, 'jpg', usedAi ? 'ai-sr' : 'hq');
     const file = new File([blob], name, { type: 'image/jpeg' });
     if (navigator.canShare && navigator.canShare({ files: [file] })) {
       await navigator.share({ files: [file], title: 'ベストショット' });
@@ -1173,6 +1390,17 @@ function bind() {
   els.levelSel.addEventListener('change', recropAll);
   els.saveAllBtn.addEventListener('click', saveAll);
   els.saveFolderBtn.addEventListener('click', saveFolder);
+  els.aiSrChk.addEventListener('change', async () => {
+    if (els.aiSrChk.checked) await enableAi({ demo: true });
+    else disableAi();
+  });
+  if (els.aiAllBtn) {
+    els.aiAllBtn.addEventListener('click', async () => {
+      if (!state.aiOn) { const ok = await enableAi({ demo: false }); if (!ok) return; }
+      els.aiAllBtn.disabled = true;
+      try { await processAllAi(); } finally { els.aiAllBtn.disabled = false; }
+    });
+  }
 
   els.grid.addEventListener('click', (e) => {
     const b = e.target.closest('button[data-act]');
@@ -1192,6 +1420,7 @@ function bind() {
     else if (act === 'frame') saveFrame(i);
     else if (act === 'ai') aiEnhance(ref);
     else if (act === 'ai-revert') aiRevert(ref);
+    else if (act === 'sr') processCardAi(ref);
     else if (act === 'toggle') {
       ref.c.view = ref.c.view === 'orig' ? 'enh' : 'orig';
       applyView(ref);
@@ -1236,6 +1465,14 @@ function applyPlatformUi() {
     els.saveAllBtn.textContent = '💾 すべて保存（iPhone）';
   }
   if (navigator.share && navigator.canShare) els.lbShare.hidden = false;
+  // AI超解像の可/不可
+  if (!aiSupported()) {
+    els.aiSrChk.disabled = true;
+    els.aiSrLabel.textContent = 'この端末では使えません';
+    els.aiSrLabel.title = 'WebGL が使えないためAI超解像を実行できません。標準の高画質補正は使えます。';
+  } else if (IS_IOS) {
+    els.aiSrLabel.textContent = '端末内AI（API不要）';
+  }
 }
 
 bind();

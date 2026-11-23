@@ -156,6 +156,21 @@ input[type=password],input[type=text]{
 .small-note{color:#5f3dc4;font-size:11px;margin-top:2px;line-height:1.5}
 .btn-ai{background:linear-gradient(90deg,#7048e8,#4c6ef5);color:#fff;font-size:12.5px;padding:8px;margin-top:2px}
 .btn-ai:hover:not(:disabled){filter:brightness(1.06)}
+
+/* --- AI超解像（端末内AI） --- */
+.ai-switch .aisw{display:flex;align-items:center;gap:8px;font-size:13.5px;padding:6px 11px;border:1px solid #d5dcf6;border-radius:9px;background:#f6f4ff;cursor:pointer}
+.ai-switch .aisw input{width:18px;height:18px;accent-color:#6741d9;cursor:pointer}
+.ai-switch .aisw input:disabled,.ai-switch .aisw input:disabled+span{opacity:.5;cursor:not-allowed}
+.aisw-text{font-weight:700;color:#5f3dc4;white-space:nowrap}
+.aistatus{margin:-4px 0 14px;padding:8px 12px;border-radius:9px;font-size:12.5px;font-weight:600;line-height:1.6;background:#eef1f8;color:var(--ink-2)}
+.aistatus[hidden]{display:none}
+.aistatus.busy{background:#f3f0ff;color:#5f3dc4}
+.aistatus.ok{background:#e7f6f0;color:#0b7a5b}
+.aistatus.ng{background:#fdeaea;color:#a61e1e}
+.badge-sr{position:absolute;bottom:8px;left:8px;background:linear-gradient(90deg,#6741d9,#4263eb);color:#fff;font-size:11px;font-weight:700;padding:3px 9px;border-radius:99px;box-shadow:0 1px 4px rgba(0,0,0,.3)}
+.btn-sr{background:linear-gradient(90deg,#6741d9,#4263eb);color:#fff;font-size:12.5px;padding:8px;margin-top:2px;border-color:transparent}
+.btn-sr:hover:not(:disabled){filter:brightness(1.06)}
+.toolbar-right .btn-sr{font-size:13px}
 .toggle{align-self:flex-start}
 
 /* toast */
@@ -234,6 +249,9 @@ footer{max-width:1120px;margin:0 auto;padding:0 20px 40px;color:var(--ink-3);fon
   .lb-stage img{max-height:58vh}
   .lb-bar{padding:8px;gap:6px}
   .lb-bar .btn{flex:1 1 auto;padding:9px 10px;font-size:13px}
+  .ai-switch{flex-direction:column;align-items:stretch}
+  .ai-switch .aisw{width:100%;justify-content:flex-start}
+  .toolbar-right .btn-sr{width:100%}
   .lb-info{flex:1 0 100%;margin-left:0;font-size:11.5px}
   .footnote{font-size:11.5px}
   footer{padding:0 12px 30px}

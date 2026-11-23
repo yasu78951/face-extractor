@@ -174,6 +174,13 @@
           <option value="none">なし（元の画質）</option>
         </select>
       </label>
+      <label class="setting inline ai-switch">
+        <span class="label">AI超解像</span>
+        <span class="aisw">
+          <input id="aiSrChk" type="checkbox">
+          <span id="aiSrLabel" class="aisw-text">端末内AI（API不要）</span>
+        </span>
+      </label>
       <label class="setting inline">
         <span class="label">出力サイズ</span>
         <select id="sizeSel">
@@ -185,24 +192,26 @@
         </select>
       </label>
       <div class="toolbar-right">
+        <button id="aiAllBtn" class="btn btn-sr" type="button" hidden>✨ すべてAI超解像</button>
         <button id="saveAllBtn" class="btn btn-main" type="button">💾 すべてJPGで保存</button>
         <button id="saveFolderBtn" class="btn btn-second" type="button" hidden>📁 フォルダに一括保存</button>
       </div>
     </div>
+    <div id="aiSrStatus" class="aistatus" hidden></div>
     <div id="saveHint" class="savehint" hidden>
       <b>iPhoneでの保存:</b> 保存ボタンを押すと「ダウンロードしますか？」の確認が出ます → 許可すると「ファイル」アプリに保存されます。
       写真アプリに入れたいときは、画像をタップして拡大 → 右上の「共有」→「画像を保存」が確実です。
     </div>
     <div id="grid" class="grid"></div>
     <div id="noFace" class="error" hidden></div>
-    <div class="footnote">※ 保存時は元動画から切り出し、必要な場合はアップスケール＋鮮明化して書き出します（表示より綺麗な画像になります）。<br>※ 遠目の小さな顔でも、768px以上の大きさに拡大して保存できます。</div>
+    <div class="footnote">※ 保存時は元動画から切り出し、必要な場合はアップスケール＋鮮明化して書き出します（表示より綺麗な画像になります）。<br>※ 遠目の小さな顔でも、768px以上の大きさに拡大して保存できます。<br>※ 「AI超解像」をONにすると、端末内AI（ESRGAN）で顔を2倍に高画質化した画像を保存できます（初回だけ約2.5MBのモデルを読み込みます）。</div>
   </section>
 
 </main>
 
 <footer>
   <div>動画はブラウザ内のメモリだけで処理され、どこにもアップロードされません。</div>
-  <div class="small">ベストショット抽出ツール v1.1（URL版）</div>
+  <div class="small">ベストショット抽出ツール v1.2（URL版・AI超解像対応）</div>
 </footer>
 
 
