@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#3b5bdb">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="顔写真抽出">
+<meta name="format-detection" content="telephone=no">
+<title>動画から顔写真を自動抽出 | ベストショット抽出ツール</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22%3E%3Ctext y=%2224%22 font-size=%2224%22%3E%F0%9F%8E%AC%3C/text%3E%3C/svg%3E">
+<link rel="apple-touch-icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22%3E%3Crect width=%2232%22 height=%2232%22 rx=%226%22 fill=%22%233b5bdb%22/%3E%3Ctext x=%2216%22 y=%2223%22 font-size=%2218%22 text-anchor=%22middle%22%3E%F0%9F%8E%AC%3C/text%3E%3C/svg%3E">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- ページを「ファイルとして直接」開いた場合の案内（https では出ない） -->
+<div id="fileWarn" class="filewarn" hidden>
+  <div class="filewarn-box">
+    <h2>URLから開いてください</h2>
+    <p>このページを <b>ファイルとして直接開く</b> と、ブラウザの制限でAIモデルを読み込めず正しく動きません。</p>
+    <p>インターネット上の <b>https:// のURL</b> から開いてください。<br>
+       PCで手元のフォルダから使う場合は、フォルダ内の <b>「start.bat」</b> をダブルクリックして起動してください。</p>
+    <p class="small">黒い画面（サーバー）はツールの一部です。使い終わったら閉じて大丈夫です。</p>
+  </div>
+</div>
+<script>
+  if (location.protocol === 'file:') {
+    document.getElementById('fileWarn').hidden = false;
+    document.body.classList.add('nojs');
+  }
+</script>
+
+<header class="top">
+  <div class="top-inner">
+    <h1>🎬 動画から顔写真を自動抽出</h1>
+    <div class="top-right">
+      <span class="pill pill-safe" title="動画はお使いの端末の外へ送信されません">🔒 すべて端末内で処理・外部送信なし</span>
+      <span id="modelStatus" class="pill pill-wait">AIモデル 準備中…</span>
+    </div>
+  </div>
+</header>
+
+<main>
+
+  <!-- STEP 1 -->
+  <section class="card" id="step1">
+    <h2><span class="stepnum">1</span> 動画を読み込む</h2>
+    <div id="dropzone" class="dropzone">
+      <div class="dz-icon">📥</div>
+      <div class="dz-main">ここに動画ファイルをドラッグ＆ドロップ</div>
+      <div class="dz-sub">または</div>
+      <button id="pickBtn" class="btn btn-main" type="button">動画ファイルを選ぶ</button>
+      <div class="dz-note">MP4 / MOV / WebM / M4V 対応（推奨: H.264 の MP4）<br>iPhoneは「写真ライブラリ」または「ファイル」から選べます</div>
+      <input id="fileInput" type="file" accept="video/*,.mp4,.mov,.m4v,.webm,.mkv" hidden>
+    </div>
+
+    <div id="videoInfo" class="videoinfo" hidden>
+      <video id="preview" playsinline webkit-playsinline muted preload="auto" disablepictureinpicture></video>
+      <div class="meta">
+        <div class="metaline"><span class="k">ファイル</span><span id="mName" class="v"></span></div>
+        <div class="metaline"><span class="k">長さ</span><span id="mDur" class="v"></span></div>
+        <div class="metaline"><span class="k">解像度</span><span id="mRes" class="v"></span></div>
+        <div class="metaline"><span class="k">サイズ</span><span id="mSize" class="v"></span></div>
+        <button id="changeBtn" class="btn btn-ghost small" type="button">別の動画を選ぶ</button>
+      </div>
+    </div>
+    <div id="loadError" class="error" hidden></div>
+  </section>
+
+  <!-- STEP 2 -->
+  <section class="card" id="step2">
+    <h2><span class="stepnum">2</span> 解析の設定</h2>
+    <div class="settings">
+      <label class="setting">
+        <span class="label">解析する間隔</span>
+        <select id="stepSel">
+          <option value="0.25">0.25秒ごと（細かい・時間がかかる）</option>
+          <option value="0.5">0.5秒ごと</option>
+          <option value="1" selected>1秒ごと（おすすめ）</option>
+          <option value="2">2秒ごと（速い）</option>
+          <option value="3">3秒ごと（とても速い）</option>
+        </select>
+      </label>
+      <label class="setting">
+        <span class="label">候補の最大枚数</span>
+        <select id="maxSel">
+          <option value="8">8枚</option>
+          <option value="12">12枚</option>
+          <option value="16" selected>16枚</option>
+          <option value="20">20枚</option>
+          <option value="30">30枚</option>
+        </select>
+      </label>
+      <label class="setting">
+        <span class="label">対象の顔</span>
+        <select id="whoSel">
+          <option value="main" selected>主役の顔（一番大きく写っている人）</option>
+          <option value="all">全員の顔</option>
+        </select>
+      </label>
+      <label class="setting check">
+        <span class="label">遠目の顔も探す</span>
+        <span class="checkrow"><input id="farChk" type="checkbox" checked> 高精度（2×2タイル走査）</span>
+      </label>
+      <div class="setting setting-btn">
+        <button id="startBtn" class="btn btn-main big" type="button" disabled>解析スタート</button>
+      </div>
+    </div>
+    <div class="hint">「正面を向いていて・ピントが合っていて・顔が大きい」フレームを自動で点数付けして選びます。<br>※ 画面の奥に小さく写っている顔も探したいときは「遠目の顔も探す」をONのままにしてください。</div>
+  </section>
+
+  <!-- 任意設定 -->
+  <details class="card" id="aiCard">
+    <summary><span class="summary-title">⚙ 設定（任意）: AI高画質化を使う</span><span class="summary-sub">ふつうは開かなくてOK</span></summary>
+    <div class="details-body">
+      <p class="hint">標準の「高画質補正」はこの端末の中だけで動きます（APIキー不要）。<br>
+        fal.ai のAPIキーを入れると、各候補に <b>✨ AI高画質化</b> ボタンが出て、CodeFormer などのAI顔復元も使えます。</p>
+      <div class="settings">
+        <label class="setting">
+          <span class="label">fal.ai APIキー</span>
+          <input id="falKey" type="password" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" autocomplete="off" spellcheck="false">
+        </label>
+        <label class="setting">
+          <span class="label">AIモデル</span>
+          <select id="falModel">
+            <option value="fal-ai/codeformer">CodeFormer（顔復元・おすすめ）</option>
+            <option value="fal-ai/esrgan">Real-ESRGAN（超解像）</option>
+          </select>
+        </label>
+        <div class="setting setting-btn nowrap">
+          <button id="saveKeyBtn" class="btn btn-second" type="button">保存</button>
+          <button id="clearKeyBtn" class="btn btn-ghost" type="button">削除</button>
+        </div>
+      </div>
+      <div class="hint">状態: <span id="aiState">未設定</span></div>
+      <div class="hint small">
+        ※ キーはこの端末のブラウザ内（localStorage）にのみ保存され、外部には送られません。共有端末では保存しないでください。<br>
+        ※ 画像はAI処理のときだけ fal.ai に送信されます（そのときだけ「端末内で完結」の対象外）。<br>
+        ※ Replicate はブラウザからの直接呼び出しがCORSで拒否されるため、このツールでは使いません（fal.ai はブラウザ直叩きに対応）。
+      </div>
+    </div>
+  </details>
+
+  <!-- PROGRESS -->
+  <section class="card" id="progressCard" hidden>
+    <h2><span class="stepnum">3</span> 解析中</h2>
+    <div class="barwrap"><div id="bar" class="bar"></div></div>
+    <div class="progressrow">
+      <span id="progressText">準備中…</span>
+      <button id="cancelBtn" class="btn btn-ghost small" type="button">キャンセル</button>
+    </div>
+    <div class="hint small" id="mobileTip" hidden>※ iPhoneでは画面を閉じたりロックしたりすると解析が止まります。画面を開いたままお待ちください。</div>
+  </section>
+
+  <!-- RESULTS -->
+  <section class="card" id="resultCard" hidden>
+    <h2><span class="stepnum">4</span> ベストショット候補</h2>
+    <div id="summary" class="summary"></div>
+    <div class="toolbar">
+      <label class="setting inline">
+        <span class="label">切り取り</span>
+        <select id="cropSel">
+          <option value="face">顔アップ（タイト）</option>
+          <option value="chest" selected>胸上（おすすめ）</option>
+          <option value="wide">ゆったり（上半身）</option>
+        </select>
+      </label>
+      <label class="setting inline">
+        <span class="label">高画質補正</span>
+        <select id="levelSel">
+          <option value="std" selected>標準（おすすめ）</option>
+          <option value="strong">強（くっきり）</option>
+          <option value="none">なし（元の画質）</option>
+        </select>
+      </label>
+      <label class="setting inline">
+        <span class="label">出力サイズ</span>
+        <select id="sizeSel">
+          <option value="auto" selected>自動アップ（小さい顔も768px以上）</option>
+          <option value="512">512 × 512 px</option>
+          <option value="768">768 × 768 px</option>
+          <option value="1024">1024 × 1024 px</option>
+          <option value="natural">元のサイズのまま</option>
+        </select>
+      </label>
+      <div class="toolbar-right">
+        <button id="saveAllBtn" class="btn btn-main" type="button">💾 すべてJPGで保存</button>
+        <button id="saveFolderBtn" class="btn btn-second" type="button" hidden>📁 フォルダに一括保存</button>
+      </div>
+    </div>
+    <div id="saveHint" class="savehint" hidden>
+      <b>iPhoneでの保存:</b> 保存ボタンを押すと「ダウンロードしますか？」の確認が出ます → 許可すると「ファイル」アプリに保存されます。
+      写真アプリに入れたいときは、画像をタップして拡大 → 右上の「共有」→「画像を保存」が確実です。
+    </div>
+    <div id="grid" class="grid"></div>
+    <div id="noFace" class="error" hidden></div>
+    <div class="footnote">※ 保存時は元動画から切り出し、必要な場合はアップスケール＋鮮明化して書き出します（表示より綺麗な画像になります）。<br>※ 遠目の小さな顔でも、768px以上の大きさに拡大して保存できます。</div>
+  </section>
+
+</main>
+
+<footer>
+  <div>動画はブラウザ内のメモリだけで処理され、どこにもアップロードされません。</div>
+  <div class="small">ベストショット抽出ツール v1.1（URL版）</div>
+</footer>
+
+
+<div id="lightbox" class="lightbox" hidden>
+  <div class="lb-inner">
+    <button id="lbClose" class="lb-close" type="button" aria-label="閉じる">✕</button>
+    <div class="lb-stage"><img id="lbImg" alt="プレビュー"></div>
+    <div class="lb-bar">
+      <button id="lbOrig" class="btn btn-ghost small" type="button">元画像</button>
+      <button id="lbEnh" class="btn btn-second small" type="button">補正後</button>
+      <button id="lbAi" class="btn btn-second small" type="button" hidden>AI</button>
+      <span id="lbInfo" class="lb-info"></span>
+      <button id="lbSave" class="btn btn-main small" type="button">この画像を保存</button>
+      <button id="lbShare" class="btn btn-second small" type="button" hidden>共有／写真に保存</button>
+    </div>
+  </div>
+</div>
+<div id="toast" class="toast" hidden></div>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>
